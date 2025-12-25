@@ -110,7 +110,7 @@ export default function DocumentSummarizer() {
 
     const generateSummaries = async (text) => {
         try {
-            const response = await fetch('http://localhost:3000/api/summarize', {
+            const response = await fetch('https://mini-project-backend-rlzn.onrender.com/api/summarize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text })
@@ -161,7 +161,7 @@ export default function DocumentSummarizer() {
                 { role: 'user', content: userMessage }
             ];
 
-            const response = await fetch('http://localhost:3000/api/chat', {
+            const response = await fetch('https://mini-project-backend-rlzn.onrender.com/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ messages })
