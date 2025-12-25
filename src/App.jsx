@@ -1,6 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, FileText, MessageSquare, Send, Loader2, X, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
+import { getDocument, GlobalWorkerOptions, version } from 'pdfjs-dist';
+
+GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
+
 export default function DocumentSummarizer() {
     const [file, setFile] = useState(null);
     const [extractedText, setExtractedText] = useState('');
@@ -34,7 +38,7 @@ export default function DocumentSummarizer() {
         ];
 
         if (!validTypes.includes(selectedFile.type)) {
-            setError('Please upload a valid file (PDF, DOC, DOCX, TXT, JPG, PNG)');
+            setError('Please upload a valid file (PDF, DOC, DOCX, TXT)');
             return;
         }
 
@@ -68,76 +72,60 @@ export default function DocumentSummarizer() {
     };
 
     const extractText = async (file) => {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-
+        return new Promise(async (resolve, reject) => {
             if (file.type === 'text/plain') {
-                reader.onload = (e) => {
-                    const text = e.target.result;
-                    if (!text || text.trim().length === 0) {
-                        reject(new Error('File is empty'));
-                    } else {
-                        resolve(text);
-                    }
-                };
-                reader.onerror = () => reject(new Error('Failed to read file'));
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = () => reject(new Error('Failed to read text file'));
                 reader.readAsText(file);
-            } else if (file.type.startsWith('image/')) {
-                reader.onload = (e) => {
-                    resolve(`This is a demonstration with an image file (${file.name}). In production, this would use OCR (Tesseract.js) to extract text from the image. For now, here's sample text to demonstrate the features:\n\nSample Document Content\n\nArtificial Intelligence has revolutionized modern technology. Machine learning algorithms can now process vast amounts of data and identify patterns that humans might miss. Deep learning, a subset of machine learning, uses neural networks with multiple layers to solve complex problems.\n\nApplications of AI include natural language processing, computer vision, robotics, and autonomous vehicles. Companies worldwide are investing heavily in AI research and development. The technology continues to evolve rapidly, with new breakthroughs happening regularly.\n\nEthical considerations around AI include bias in algorithms, privacy concerns, and the impact on employment. As AI becomes more prevalent, it's crucial to develop frameworks for responsible AI development and deployment.`);
-                };
-                reader.onerror = () => reject(new Error('Failed to read image'));
-                reader.readAsDataURL(file);
             } else if (file.type === 'application/pdf') {
-                resolve(`This is a demonstration with a PDF file (${file.name}). In production, this would use pdf-parse library to extract text. For now, here's sample text:\n\nSample PDF Document\n\nCloud computing has transformed how businesses operate. Organizations can now access computing resources on-demand without maintaining physical infrastructure. Major cloud providers offer services including storage, computing power, databases, and AI tools.\n\nBenefits of cloud computing include scalability, cost efficiency, and flexibility. Companies can scale resources up or down based on demand. This pay-as-you-go model reduces capital expenses and allows businesses to focus on core operations.\n\nChallenges include data security, compliance requirements, and potential vendor lock-in. Organizations must carefully evaluate cloud providers and implement proper security measures to protect sensitive data.`);
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const pdf = await getDocument({ data: arrayBuffer }).promise;
+                    let fullText = '';
+
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        const pageText = textContent.items.map(item => item.str).join(' ');
+                        fullText += pageText + '\n';
+                    }
+
+                    if (!fullText.trim()) {
+                        reject(new Error('No text found in PDF (it might be scanned/image-based)'));
+                    } else {
+                        resolve(fullText);
+                    }
+                } catch (err) {
+                    console.error('PDF extraction error:', err);
+                    reject(new Error('Failed to extract text from PDF: ' + err.message));
+                }
+            } else if (file.type.startsWith('image/')) {
+                resolve(`[Image support requires OCR which is not yet implemented. Please upload a PDF or text file.]`);
             } else {
-                resolve(`This is a demonstration with a ${file.type} file (${file.name}). In production, this would use mammoth library for DOCX files. Here's sample text:\n\nSample Document\n\nCybersecurity has become increasingly important in our digital age. Organizations face constant threats from hackers, malware, and data breaches. Protecting sensitive information requires multiple layers of security including firewalls, encryption, and employee training.\n\nCommon security measures include strong password policies, two-factor authentication, regular software updates, and security audits. Companies must also develop incident response plans to quickly address security breaches when they occur.\n\nEmerging technologies like blockchain and quantum computing will impact future cybersecurity strategies. As threats evolve, security practices must adapt to protect against new vulnerabilities.`);
+                resolve(`[DOC/DOCX support requires additional libraries not yet installed. Please upload a PDF or text file.]`);
             }
         });
     };
 
     const generateSummaries = async (text) => {
         try {
-            const response = await fetch('https://api.anthropic.com/v1/messages', {
+            const response = await fetch('http://localhost:3000/api/summarize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: 'claude-sonnet-4-20250514',
-                    max_tokens: 1000,
-                    messages: [{
-                        role: 'user',
-                        content: `Analyze this document and provide a structured summary. Respond ONLY with valid JSON (no markdown, no backticks, no preamble).
-
-Document text:
-${text.substring(0, 12000)}
-
-Required JSON format:
-{
-  "short": "2-3 sentence summary",
-  "detailed": "One detailed paragraph summary",
-  "bullets": ["key point 1", "key point 2", "key point 3", "key point 4", "key point 5"],
-  "insights": ["insight 1", "insight 2", "insight 3"],
-  "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]
-}`
-                    }]
-                })
+                body: JSON.stringify({ text })
             });
 
             if (!response.ok) {
-                throw new Error('API request failed');
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'API request failed');
             }
 
             const data = await response.json();
-            let content = data.content[0].text.trim();
-
-            // Remove markdown code blocks if present
-            content = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-            const parsed = JSON.parse(content);
-            return parsed;
+            return data;
         } catch (err) {
             console.error('Summary generation error:', err);
-            throw new Error('Failed to generate summaries');
+            throw new Error('Failed to generate summaries: ' + err.message);
         }
     };
 
@@ -150,40 +138,45 @@ Required JSON format:
         setChatLoading(true);
 
         try {
-            const conversationHistory = chatMessages.slice(1).map(msg => ({
+            const conversationHistory = chatMessages.map(msg => ({
                 role: msg.role,
                 content: msg.content
             }));
 
-            const response = await fetch('https://api.anthropic.com/v1/messages', {
+            // Construct messages for the backend (including system/context instructions if needed, 
+            // though backend could also handle the initial context setup)
+            // Ideally, we just send history + new message + context.
+            // Let's structuring it so the backend receives the full context.
+
+            const messages = [
+                {
+                    role: 'user',
+                    content: `You are a helpful assistant answering questions about this document. Only use information from the document to answer questions.\n\nDocument:\n${extractedText.substring(0, 20000)}`
+                },
+                {
+                    role: 'assistant',
+                    content: 'I understand. I will answer questions based only on the document content provided.'
+                },
+                ...conversationHistory,
+                { role: 'user', content: userMessage }
+            ];
+
+            const response = await fetch('http://localhost:3000/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: 'claude-sonnet-4-20250514',
-                    max_tokens: 1000,
-                    messages: [
-                        {
-                            role: 'user',
-                            content: `You are a helpful assistant answering questions about this document. Only use information from the document to answer questions.\n\nDocument:\n${extractedText.substring(0, 10000)}`
-                        },
-                        {
-                            role: 'assistant',
-                            content: 'I understand. I will answer questions based only on the document content provided.'
-                        },
-                        ...conversationHistory,
-                        { role: 'user', content: userMessage }
-                    ]
-                })
+                body: JSON.stringify({ messages })
             });
 
             if (!response.ok) {
-                throw new Error('Chat API request failed');
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Chat API request failed');
             }
 
             const data = await response.json();
-            const answer = data.content[0].text;
+            const answer = data.content;
             setChatMessages(prev => [...prev, { role: 'assistant', content: answer }]);
         } catch (err) {
+            console.error('Chat error:', err);
             setChatMessages(prev => [...prev, {
                 role: 'assistant',
                 content: 'Sorry, I encountered an error. Please try again.'
@@ -251,7 +244,7 @@ Required JSON format:
                                     Upload Your Document
                                 </h2>
                                 <p className="text-gray-600">
-                                    Supports PDF, DOC, DOCX, TXT, JPG, and PNG files
+                                    Supports PDF, DOC, DOCX, and TXT files
                                 </p>
                             </div>
 
@@ -458,8 +451,8 @@ Required JSON format:
                                         >
                                             <div
                                                 className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl shadow-sm ${msg.role === 'user'
-                                                        ? 'bg-indigo-600 text-white'
-                                                        : 'bg-white text-gray-900 border border-gray-200'
+                                                    ? 'bg-indigo-600 text-white'
+                                                    : 'bg-white text-gray-900 border border-gray-200'
                                                     }`}
                                             >
                                                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
